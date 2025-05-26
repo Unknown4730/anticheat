@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['person', 'students_cheating', 'students_not_cheating']
+
+roboflow:
+  workspace: rtjhx
+  project: exam-cheating-jnmv1-hodrg
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/rtjhx/exam-cheating-jnmv1-hodrg/dataset/1

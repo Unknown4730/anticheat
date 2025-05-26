@@ -1,0 +1,16 @@
+tracker_type: botsort  # Tracker name
+track_high_thresh: 0.6  # Threshold for high confidence detections
+track_low_thresh: 0.1   # Minimum confidence to consider a detection
+new_track_thresh: 0.7   # Threshold for starting new tracks
+track_buffer: 30        # Number of frames to keep "lost" tracks alive
+match_thresh: 0.8       # Matching threshold for IoU
+gmc_method: 'sparseOptFlow'  # Global motion compensation method
+with_reid: False        # Disable Re-ID to reduce load
+strong_sort_weights: '' # Not used for BoT-SORT, can be empty
+max_dist: 0.2
+max_iou_distance: 0.7
+max_age: 70
+n_init: 3
+nn_budget: 100
+proximity_thresh: 0.5   # <-- Add this line
+appearance_thresh: 0.25   # <-- Add this line
