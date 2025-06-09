@@ -14,3 +14,4 @@ n_init: 3
 nn_budget: 100
 proximity_thresh: 0.5   # <-- Add this line
 appearance_thresh: 0.25   # <-- Add this line
+fuse_score: False
