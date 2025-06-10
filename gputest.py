@@ -5,7 +5,7 @@ from collections import defaultdict
 from ultralytics import YOLO
 
 # --- Settings ---
-MODEL_PATH = "best.pt"
+MODEL_PATH = "D:\\anticheat-main\\anticheat-main\\runs\\detect\\train\\weights\\best.pt"
 TRACKER_CONFIG = "botsort.yaml"
 CONFIDENCE_THRESHOLD = 0.5
 MAX_STRIKES = 3
