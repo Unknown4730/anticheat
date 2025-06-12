@@ -7,16 +7,15 @@ from ultralytics import YOLO
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-# --- Settings ---
+# === CONFIG ===
 MODEL_PATH = "D:\\anticheat-main\\anticheat-main\\runs\\detect\\train\\weights\\best.pt"
 TRACKER_CONFIG = "botsort.yaml"
-CONFIDENCE_THRESHOLD = 0.5
 MAX_STRIKES = 3
 
-# --- Load model
+# === INIT YOLO ===
 model = YOLO(MODEL_PATH)
 
-# --- SQLite DB setup
+# === DB SETUP ===
 conn = sqlite3.connect("cheat_logs.db", check_same_thread=False)
 cursor = conn.cursor()
 cursor.execute('''
@@ -30,50 +29,45 @@ cursor.execute('''
 ''')
 conn.commit()
 
+# === STRIKE TRACKING ===
 strike_counts = defaultdict(int)
 cap = None
 running = False
 
-# --- Webcam Utility ---
+# === DETECT CAMERAS ===
 def list_webcams(max_devices=5):
     available = []
     for i in range(max_devices):
-        temp_cap = cv2.VideoCapture(i)
-        if temp_cap.isOpened():
+        cap = cv2.VideoCapture(i)
+        if cap.isOpened():
             available.append(i)
-            temp_cap.release()
+            cap.release()
     return available
 
-# --- GUI Action Functions ---
+# === GUI ACTIONS ===
 def start_detection():
     global cap, running
-    try:
-        selected_index = int(cam_select.get())
-        cap = cv2.VideoCapture(selected_index)
+    selected_index = int(cam_select.get())
 
-        if not cap.isOpened():
-            messagebox.showerror("Error", f"Webcam at index {selected_index} could not be accessed.")
-            return
+    cap = cv2.VideoCapture(selected_index)
+    if not cap.isOpened():
+        messagebox.showerror("Error", "Could not access selected webcam.")
+        return
 
-        running = True
-        threading.Thread(target=run_detection, daemon=True).start()
-    except ValueError:
-        messagebox.showerror("Error", "Invalid camera index selected.")
-    except Exception as e:
-        messagebox.showerror("Error", f"An unexpected error occurred: {e}")
+    running = True
+    threading.Thread(target=run_detection, daemon=True).start()
 
 def stop_detection():
     global running
     running = False
 
 def reset_logs():
-    global strike_counts
     strike_counts.clear()
     cursor.execute("DELETE FROM detections")
     conn.commit()
-    messagebox.showinfo("Logs Reset", "All cheating logs have been cleared.")
+    messagebox.showinfo("Reset", "Logs cleared successfully.")
 
-# --- Detection Loop ---
+# === MAIN DETECTION LOOP ===
 def run_detection():
     global cap, running
     while running:
@@ -113,34 +107,42 @@ def run_detection():
                             cv2.putText(frame, f"⚠️ Cheating Detected", (x1, y2 + 30),
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-        frame_large = cv2.resize(frame, None, fx=2.0, fy=2.5)
-        cv2.imshow("🛡️ Anti-Cheat Detection (BoT-SORT + ReID)", frame_large)
+        frame_large = cv2.resize(frame, None, fx=1.5, fy=1.5)
+        cv2.imshow("🛡️ Anti-Cheat Detection", frame_large)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     if cap:
         cap.release()
     cv2.destroyAllWindows()
 
-# --- GUI Setup ---
+# === GUI SETUP ===
 root = tk.Tk()
 root.title("Anti-Cheat Surveillance 🛡️")
-root.geometry("400x220")
+root.geometry("420x240")
 root.configure(bg="#f0f0f0")
 
+# Camera Dropdown
 tk.Label(root, text="Select Webcam:", font=("Arial", 12), bg="#f0f0f0").pack(pady=10)
 available_cams = list_webcams()
+if not available_cams:
+    messagebox.showerror("Error", "No webcams found! Plug in one and restart.")
+    root.destroy()
+    exit()
+
 cam_select = ttk.Combobox(root, values=[str(i) for i in available_cams], state="readonly", width=10, font=("Arial", 12))
-cam_select.set(str(available_cams[0]) if available_cams else "0")
+cam_select.set(str(available_cams[0]))
 cam_select.pack()
 
-tk.Button(root, text="Start Detection", command=start_detection, bg="#4CAF50", fg="white", font=("Arial", 12), width=20).pack(pady=10)
-tk.Button(root, text="Reset Logs", command=reset_logs, bg="#FF9800", fg="white", font=("Arial", 12), width=20).pack(pady=5)
-tk.Button(root, text="Quit", command=lambda: (stop_detection(), root.destroy()), bg="#F44336", fg="white", font=("Arial", 12), width=20).pack(pady=10)
+# Buttons
+tk.Button(root, text="▶ Start Detection", command=start_detection, bg="#4CAF50", fg="white", font=("Arial", 12), width=22).pack(pady=10)
+tk.Button(root, text="🧹 Reset Logs", command=reset_logs, bg="#FF9800", fg="white", font=("Arial", 12), width=22).pack(pady=5)
+tk.Button(root, text="❌ Quit", command=lambda: (stop_detection(), root.destroy()), bg="#F44336", fg="white", font=("Arial", 12), width=22).pack(pady=10)
 
 root.mainloop()
 
+# Cleanup
 if cap:
     cap.release()
 cv2.destroyAllWindows()
