@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime database files (created automatically on first run)
+data/cheat_logs.db
+data/*.db
+*.db
+
+# Model weights that are auto-downloaded or large training outputs
+runs/
+*.pt
+!models/yolov8n.pt
+
+# Dataset cache files
+data/train/labels.cache
+data/valid/labels.cache
+data/test/labels.cache
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor / IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Logs
+*.log
