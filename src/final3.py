@@ -1,20 +1,23 @@
+import os
 import cv2
 import sqlite3
 from datetime import datetime
 from collections import defaultdict
 from ultralytics import YOLO
 
-# --- Settings ---
-MODEL_PATH = "D:\\anticheat-main\\anticheat-main\\runs\\detect\\train\\weights\\best.pt"
-TRACKER_CONFIG = "botsort.yaml"
+# --- SETTINGS ---
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SRC_DIR)
+
 CONFIDENCE_THRESHOLD = 0.5
 MAX_STRIKES = 3
+MODEL_PATH = os.environ.get("MODEL_PATH") or os.path.join(_PROJECT_ROOT, "models", "yolov8n.pt")
+TRACKER_CONFIG = os.path.join(_PROJECT_ROOT, "config", "botsort.yaml")
+_DB_PATH = os.path.join(_PROJECT_ROOT, "data", "cheat_logs.db")
 
-# --- Load model
-model = YOLO(MODEL_PATH)
-
-# --- SQLite DB setup
-conn = sqlite3.connect("cheat_logs.db")
+# --- INIT DATABASE ---
+os.makedirs(os.path.dirname(_DB_PATH), exist_ok=True)
+conn = sqlite3.connect(_DB_PATH)
 cursor = conn.cursor()
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS detections (
@@ -27,64 +30,61 @@ cursor.execute('''
 ''')
 conn.commit()
 
-# --- Strike counter
+# --- INIT YOLO MODEL WITH TRACKING ---
+model = YOLO(MODEL_PATH)
+
+# --- STRIKE COUNTER ---
 strike_counts = defaultdict(int)
 
-# --- Start webcam
+# --- CAPTURE VIDEO ---
 cap = cv2.VideoCapture(0)
-if not cap.isOpened():
-    print("❌ Webcam not accessible")
-    exit()
-
-print("[INFO] Running with BoT-SORT + Re-ID... Press 'q' to quit or 'r' to reset logs.")
 
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
-    results = model.track(source=frame, stream=True, tracker=TRACKER_CONFIG, persist=True)
+    results = model.track(source=frame, persist=True, conf=CONFIDENCE_THRESHOLD, tracker=TRACKER_CONFIG, stream=True)
 
     for r in results:
         boxes = r.boxes
-        if boxes.id is not None:
+        if boxes is not None and boxes.id is not None:
             for i in range(len(boxes)):
-                cls = int(boxes.cls[i])
-                label = model.names[cls]
+                cls_id = int(boxes.cls[i])
+                label = model.names[cls_id]
                 conf = float(boxes.conf[i])
-                id_ = int(boxes.id[i])
-                x1, y1, x2, y2 = map(int, boxes.xyxy[i].tolist())
+                id_ = int(boxes.id[i])  # Real track ID from BoT-SORT
+                x1, y1, x2, y2 = map(int, boxes.xyxy[i])
 
+                # Draw bounding box and label
                 color = (0, 255, 0) if label == "students_not_cheating" else (0, 0, 255)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, f"{label} | ID {id_}", (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
+                # Log and track cheating
                 if label == "students_cheating":
                     strike_counts[id_] += 1
-                    strikes = strike_counts[id_]
-
-                    if strikes <= MAX_STRIKES:
+                    if strike_counts[id_] <= MAX_STRIKES:
                         cursor.execute('''
                             INSERT INTO detections (student_id, timestamp, label, strikes)
                             VALUES (?, ?, ?, ?)
-                        ''', (str(id_), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), label, strikes))
+                        ''', (str(id_), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), label, strike_counts[id_]))
                         conn.commit()
-
-                    if strikes >= MAX_STRIKES:
-                        cv2.putText(frame, f"⚠️ Cheating Detected", (x1, y2 + 20),
+                    if strike_counts[id_] >= MAX_STRIKES:
+                        cv2.putText(frame, "⚠️ MARKED CHEATING", (x1, y2 + 20),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
-    cv2.imshow("Anti-Cheat Detection (BoT-SORT + ReID)", frame)
-    key = cv2.waitKey(1) & 0xFF
+    cv2.imshow("BoT-SORT Cheat Detection", frame)
 
+    key = cv2.waitKey(1) & 0xFF
     if key == ord("q"):
         break
     elif key == ord("r"):
-        strike_counts.clear()
         cursor.execute("DELETE FROM detections")
         conn.commit()
-        print("[INFO] Logs reset!")
+        strike_counts.clear()
+        print("🔄 All logs reset.")
 
 cap.release()
 cv2.destroyAllWindows()
