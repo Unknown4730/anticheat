@@ -1,6 +1,11 @@
-ultralytics>=8.0.0
-torch>=2.0.0
-torchvision>=0.15.0
-opencv-python>=4.8.0
-numpy>=1.24.0
-pyyaml>=6.0
+# Core dependencies
+ultralytics>=8.0.0       # YOLOv8 model + training utilities
+torch>=2.0.0             # PyTorch – install a CUDA-enabled build for GPU support
+torchvision>=0.15.0      # Companion vision library for PyTorch
+opencv-python>=4.8.0     # Video capture and frame rendering
+numpy>=1.24.0            # Numerical arrays (used by CV/YOLO)
+pyyaml>=6.0              # YAML parsing (tracker/dataset configs)
+
+# GUI (usually included with Python; listed for documentation purposes)
+# tkinter is part of the standard library on most platforms.
+# On Ubuntu/Debian it may need: sudo apt-get install python3-tk
