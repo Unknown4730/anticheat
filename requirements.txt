@@ -1,9 +1,9 @@
 # Core dependencies
 ultralytics>=8.0.0       # YOLOv8 model + training utilities
-torch>=1.13.0            # PyTorch – install a CUDA-enabled build for GPU support
-torchvision>=0.14.0      # Companion vision library for PyTorch
-opencv-python>=4.7.0     # Video capture and frame rendering
-numpy>=1.23.0            # Numerical arrays (used by CV/YOLO)
+torch>=2.0.0             # PyTorch – install a CUDA-enabled build for GPU support
+torchvision>=0.15.0      # Companion vision library for PyTorch
+opencv-python>=4.8.0     # Video capture and frame rendering
+numpy>=1.24.0            # Numerical arrays (used by CV/YOLO)
 pyyaml>=6.0              # YAML parsing (tracker/dataset configs)
 
 # GUI (usually included with Python; listed for documentation purposes)
