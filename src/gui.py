@@ -1,14 +1,15 @@
 """
 Anti-Cheat Surveillance GUI
 ============================
-Main entrypoint for the anti-cheat detection system.
+Detects exam cheating in real-time using YOLOv8 + BoT-SORT tracking.
 
 Usage:
-    python src/gui.py
-    python src/gui.py --model models/yolov8n.pt
-    MODEL_PATH=models/yolov8n.pt python src/gui.py
+    python src/gui.py [--model PATH] [--config PATH] [--db PATH]
 
-See README.md for full setup instructions.
+Environment variables (override defaults):
+    MODEL_PATH      Path to YOLO weights file
+    TRACKER_CONFIG  Path to BoT-SORT tracker YAML
+    DB_PATH         Path to SQLite database file
 """
 
 import argparse
@@ -19,112 +20,105 @@ import sqlite3
 import threading
 from datetime import datetime
 from collections import defaultdict
-
+from ultralytics import YOLO
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 # ---------------------------------------------------------------------------
-# Resolve paths relative to the project root (one directory above src/)
+# Determine repository root (two levels up from this file: src/ -> repo root)
 # ---------------------------------------------------------------------------
-_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SRC_DIR)
-
-
-def _abs(rel_path: str) -> str:
-    """Return an absolute path given a path relative to the project root."""
-    return os.path.join(_PROJECT_ROOT, rel_path)
-
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_HERE)
 
 # ---------------------------------------------------------------------------
-# Parse CLI arguments / environment variables
+# Default paths (relative to repo root; overridable via CLI or env vars)
 # ---------------------------------------------------------------------------
-def _parse_args() -> argparse.Namespace:
+_DEFAULT_MODEL = os.path.join(_REPO_ROOT, "models", "best.pt")
+_DEFAULT_TRACKER = os.path.join(_REPO_ROOT, "config", "botsort.yaml")
+_DEFAULT_DB = os.path.join(_REPO_ROOT, "cheat_logs.db")
+
+
+def parse_args():
     parser = argparse.ArgumentParser(
-        description="Anti-Cheat Surveillance – real-time exam monitoring via YOLO + BoT-SORT."
+        description="Anti-Cheat Surveillance – YOLOv8 + BoT-SORT"
     )
     parser.add_argument(
         "--model",
-        default=None,
-        help=(
-            "Path to the YOLO model weights file. "
-            "Overridden by the MODEL_PATH environment variable if set. "
-            "Defaults to ./models/yolov8n.pt relative to the project root."
-        ),
+        default=os.environ.get("MODEL_PATH", _DEFAULT_MODEL),
+        help="Path to YOLOv8 weights file (default: models/best.pt)",
+    )
+    parser.add_argument(
+        "--config",
+        default=os.environ.get("TRACKER_CONFIG", _DEFAULT_TRACKER),
+        help="Path to BoT-SORT tracker config YAML (default: config/botsort.yaml)",
+    )
+    parser.add_argument(
+        "--db",
+        default=os.environ.get("DB_PATH", _DEFAULT_DB),
+        help="Path to SQLite database file (default: cheat_logs.db at repo root)",
     )
     return parser.parse_args()
 
 
-args = _parse_args()
-
-# Priority: env var > CLI flag > default
-MODEL_PATH: str = (
-    os.environ.get("MODEL_PATH")
-    or args.model
-    or _abs("models/yolov8n.pt")
-)
-
-TRACKER_CONFIG: str = _abs("config/botsort.yaml")
-DB_PATH: str = _abs(os.path.join("data", "cheat_logs.db"))
-CONFIDENCE_THRESHOLD: float = 0.5
-MAX_STRIKES: int = 3
-
 # ---------------------------------------------------------------------------
-# Validate model file before importing ultralytics (gives a clearer error)
+# Runtime settings (non-path tuning parameters)
 # ---------------------------------------------------------------------------
-if not os.path.isfile(MODEL_PATH):
-    print(
-        f"\n[ERROR] Model file not found: {MODEL_PATH}\n"
-        "  • Make sure the model weights file exists at that path.\n"
-        "  • You can specify a different path with --model <path> or the MODEL_PATH env var.\n"
-        "  • See README.md for download / re-training instructions.\n",
-        file=sys.stderr,
+CONFIDENCE_THRESHOLD = 0.5
+MAX_STRIKES = 3
+
+
+def validate_paths(model_path, tracker_config):
+    """Validate that required files exist before loading."""
+    if not os.path.isfile(model_path):
+        print(
+            f"ERROR: Model file not found: {model_path}\n"
+            "Place your trained weights at models/best.pt or pass --model <path>."
+        )
+        sys.exit(1)
+    if not os.path.isfile(tracker_config):
+        print(
+            f"ERROR: Tracker config not found: {tracker_config}\n"
+            "Expected at config/botsort.yaml or pass --config <path>."
+        )
+        sys.exit(1)
+
+
+def init_db(db_path):
+    """Create/connect to SQLite DB and ensure the detections table exists."""
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS detections (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id TEXT,
+            timestamp  TEXT,
+            label      TEXT,
+            strikes    INTEGER
+        )
+        """
     )
-    sys.exit(1)
+    conn.commit()
+    return conn, cursor
 
-try:
-    from ultralytics import YOLO
-except ImportError:
-    print(
-        "\n[ERROR] The 'ultralytics' package is not installed.\n"
-        "  Run:  pip install -r requirements.txt\n"
-        "  See README.md for full setup instructions.\n",
-        file=sys.stderr,
-    )
-    sys.exit(1)
 
 # ---------------------------------------------------------------------------
-# Load model
+# Globals filled after argument parsing
 # ---------------------------------------------------------------------------
-model = YOLO(MODEL_PATH)
+model = None
+conn = None
+cursor = None
+TRACKER_CONFIG = None
 
-# ---------------------------------------------------------------------------
-# SQLite DB – stored in data/ so it is never committed (see .gitignore)
-# ---------------------------------------------------------------------------
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute(
-    """
-    CREATE TABLE IF NOT EXISTS detections (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_id TEXT,
-        timestamp  TEXT,
-        label      TEXT,
-        strikes    INTEGER
-    )
-    """
-)
-conn.commit()
-
-strike_counts: defaultdict = defaultdict(int)
+strike_counts = defaultdict(int)
 cap = None
 running = False
 
 
 # ---------------------------------------------------------------------------
-# Webcam utility
+# Webcam utilities
 # ---------------------------------------------------------------------------
-def list_webcams(max_devices: int = 5) -> list:
+def list_webcams(max_devices=5):
     available = []
     for i in range(max_devices):
         temp_cap = cv2.VideoCapture(i)
@@ -135,27 +129,33 @@ def list_webcams(max_devices: int = 5) -> list:
 
 
 # ---------------------------------------------------------------------------
-# GUI action functions
+# GUI action handlers
 # ---------------------------------------------------------------------------
-def start_detection() -> None:
+def start_detection():
     global cap, running
-    selected_index = int(cam_select.get())
-    cap = cv2.VideoCapture(selected_index)
+    try:
+        selected_index = int(cam_select.get())
+    except ValueError:
+        messagebox.showerror("Error", "Invalid camera index selected.")
+        return
 
+    cap = cv2.VideoCapture(selected_index)
     if not cap.isOpened():
-        messagebox.showerror("Error", "Selected webcam could not be accessed.")
+        messagebox.showerror(
+            "Error", f"Webcam at index {selected_index} could not be accessed."
+        )
         return
 
     running = True
     threading.Thread(target=run_detection, daemon=True).start()
 
 
-def stop_detection() -> None:
+def stop_detection():
     global running
     running = False
 
 
-def reset_logs() -> None:
+def reset_logs():
     global strike_counts
     strike_counts.clear()
     cursor.execute("DELETE FROM detections")
@@ -164,9 +164,9 @@ def reset_logs() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Detection loop (runs in a background thread)
+# Detection loop (runs in background thread)
 # ---------------------------------------------------------------------------
-def run_detection() -> None:
+def run_detection():
     global cap, running
     while running:
         ret, frame = cap.read()
@@ -178,11 +178,12 @@ def run_detection() -> None:
             stream=True,
             tracker=TRACKER_CONFIG,
             persist=True,
+            conf=CONFIDENCE_THRESHOLD,
         )
 
         for r in results:
             boxes = r.boxes
-            if boxes.id is None:
+            if boxes is None or boxes.id is None:
                 continue
 
             for i in range(len(boxes)):
@@ -210,7 +211,8 @@ def run_detection() -> None:
                     if strikes <= MAX_STRIKES:
                         cursor.execute(
                             """
-                            INSERT INTO detections (student_id, timestamp, label, strikes)
+                            INSERT INTO detections
+                                (student_id, timestamp, label, strikes)
                             VALUES (?, ?, ?, ?)
                             """,
                             (
@@ -234,7 +236,7 @@ def run_detection() -> None:
                         )
 
         frame_large = cv2.resize(frame, None, fx=1.5, fy=1.5)
-        cv2.imshow("Anti-Cheat Detection (BoT-SORT + ReID)", frame_large)
+        cv2.imshow("Anti-Cheat Detection (BoT-SORT)", frame_large)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
@@ -245,59 +247,76 @@ def run_detection() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GUI setup
+# Entry point
 # ---------------------------------------------------------------------------
-root = tk.Tk()
-root.title("Anti-Cheat Surveillance")
-root.geometry("400x220")
-root.configure(bg="#f0f0f0")
+def main():
+    global model, conn, cursor, TRACKER_CONFIG
 
-tk.Label(root, text="Select Webcam:", font=("Arial", 12), bg="#f0f0f0").pack(pady=10)
-available_cams = list_webcams()
-cam_select = ttk.Combobox(
-    root,
-    values=[str(i) for i in available_cams],
-    state="readonly",
-    width=10,
-    font=("Arial", 12),
-)
-cam_select.set(str(available_cams[0]) if available_cams else "0")
-cam_select.pack()
+    args = parse_args()
+    validate_paths(args.model, args.config)
 
-tk.Button(
-    root,
-    text="Start Detection",
-    command=start_detection,
-    bg="#4CAF50",
-    fg="white",
-    font=("Arial", 12),
-    width=20,
-).pack(pady=10)
-tk.Button(
-    root,
-    text="Reset Logs",
-    command=reset_logs,
-    bg="#FF9800",
-    fg="white",
-    font=("Arial", 12),
-    width=20,
-).pack(pady=5)
-tk.Button(
-    root,
-    text="Quit",
-    command=lambda: (stop_detection(), root.destroy()),
-    bg="#F44336",
-    fg="white",
-    font=("Arial", 12),
-    width=20,
-).pack(pady=10)
+    TRACKER_CONFIG = args.config
+    model = YOLO(args.model)
+    conn, cursor = init_db(args.db)
 
-root.mainloop()
+    # Build GUI
+    root = tk.Tk()
+    root.title("Anti-Cheat Surveillance")
+    root.geometry("400x220")
+    root.configure(bg="#f0f0f0")
 
-# ---------------------------------------------------------------------------
-# Cleanup
-# ---------------------------------------------------------------------------
-if cap:
-    cap.release()
-cv2.destroyAllWindows()
-conn.close()
+    tk.Label(root, text="Select Webcam:", font=("Arial", 12), bg="#f0f0f0").pack(
+        pady=10
+    )
+
+    global cam_select
+    available_cams = list_webcams()
+    cam_select = ttk.Combobox(
+        root,
+        values=[str(i) for i in available_cams],
+        state="readonly",
+        width=10,
+        font=("Arial", 12),
+    )
+    cam_select.set(str(available_cams[0]) if available_cams else "0")
+    cam_select.pack()
+
+    tk.Button(
+        root,
+        text="Start Detection",
+        command=start_detection,
+        bg="#4CAF50",
+        fg="white",
+        font=("Arial", 12),
+        width=20,
+    ).pack(pady=10)
+    tk.Button(
+        root,
+        text="Reset Logs",
+        command=reset_logs,
+        bg="#FF9800",
+        fg="white",
+        font=("Arial", 12),
+        width=20,
+    ).pack(pady=5)
+    tk.Button(
+        root,
+        text="Quit",
+        command=lambda: (stop_detection(), root.destroy()),
+        bg="#F44336",
+        fg="white",
+        font=("Arial", 12),
+        width=20,
+    ).pack(pady=10)
+
+    root.mainloop()
+
+    stop_detection()
+    if cap:
+        cap.release()
+    cv2.destroyAllWindows()
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,106 +1,138 @@
 # Usage Guide
 
-## Running the GUI
+This guide covers everything you need to run the Anti-Cheat Surveillance system.
+
+---
+
+## Running the Application
+
+From the repository root:
 
 ```bash
 python src/gui.py
 ```
 
-### Options
+### Command-line Options
 
-| Flag / Variable | Default | Description |
-|---|---|---|
-| `--model <path>` | `models/yolov8n.pt` | Path to YOLO weights file |
-| `MODEL_PATH` env var | `models/yolov8n.pt` | Alternative to `--model` |
+```
+python src/gui.py [--model PATH] [--config PATH] [--db PATH]
 
-The environment variable takes precedence over the CLI flag; both override the default.
-
----
-
-## GUI Controls
-
-Once the application window opens:
-
-1. **Select Webcam** – choose the camera index from the dropdown (0 is typically the built-in webcam).
-2. **Start Detection** – opens a live OpenCV window and begins tracking.
-3. **Reset Logs** – clears all strike counters and removes all rows from the SQLite database.
-4. **Quit** – stops detection and closes the application.
-
-While the detection window is open, press `q` to stop the video feed.
-
----
-
-## Running the Headless Script
-
-`src/final3.py` provides the same detection logic without a GUI:
-
-```bash
-python src/final3.py
+  --model PATH    Path to YOLOv8 weights (.pt). Default: models/best.pt
+  --config PATH   Path to BoT-SORT tracker YAML. Default: config/botsort.yaml
+  --db PATH       Path to SQLite database. Default: cheat_logs.db
 ```
 
-Keyboard shortcuts:
+### Environment Variables
 
-| Key | Action |
-|---|---|
-| `q` | Quit |
-| `r` | Reset all logs |
+You can also set defaults via environment variables:
 
----
-
-## Detection Logic
-
-- Each tracked person is assigned a persistent ID by BoT-SORT.
-- Every frame where a person is classified as `students_cheating` increments their strike counter.
-- When the counter reaches **MAX_STRIKES** (default: 3), a red "WARNING: Cheating Detected" overlay is shown.
-- All cheating events (up to MAX_STRIKES per student) are logged to `data/cheat_logs.db`.
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `MODEL_PATH` | YOLOv8 weights file | `models/best.pt` |
+| `TRACKER_CONFIG` | BoT-SORT YAML | `config/botsort.yaml` |
+| `DB_PATH` | SQLite database path | `cheat_logs.db` |
 
 ---
 
-## Database Schema
+## GUI Walkthrough
 
-The SQLite database (`data/cheat_logs.db`) is created automatically:
+When the application starts you will see a simple control panel:
+
+1. **Select Webcam** – Drop-down listing all available camera devices (0, 1, 2, …). Select the one connected to your exam room.
+2. **Start Detection** – Opens the selected webcam and begins the detection loop. A second window titled *Anti-Cheat Detection (BoT-SORT)* will appear showing the annotated live feed.
+3. **Reset Logs** – Clears the in-memory strike counter and deletes all rows from the database. Useful when starting a new exam session.
+4. **Quit** – Stops detection and closes all windows.
+
+---
+
+## Live Feed Window
+
+The feed window overlays bounding boxes on each detected person:
+
+| Colour | Meaning |
+|--------|---------|
+| Green box | `students_not_cheating` |
+| Red box | `students_cheating` |
+
+Each box includes the class label and the tracker-assigned student ID.
+
+When a student accumulates **3 or more strikes**, the text `WARNING: Cheating Detected` appears below their bounding box.
+
+Press **q** inside the feed window to stop detection (same effect as the Quit button).
+
+---
+
+## Database & Logs
+
+Detections are written to a SQLite database (default: `cheat_logs.db` in the repository root).
+
+### Schema
 
 ```sql
 CREATE TABLE detections (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    student_id TEXT,
-    timestamp  TEXT,
-    label      TEXT,
-    strikes    INTEGER
+    student_id TEXT,        -- BoT-SORT tracker ID
+    timestamp  TEXT,        -- YYYY-MM-DD HH:MM:SS
+    label      TEXT,        -- detected class name
+    strikes    INTEGER      -- cumulative strike count for this student
 );
 ```
 
-You can inspect it with any SQLite browser or:
+### Querying the Database
 
 ```bash
-sqlite3 data/cheat_logs.db "SELECT * FROM detections;"
+sqlite3 cheat_logs.db "SELECT * FROM detections ORDER BY timestamp DESC LIMIT 20;"
 ```
+
+The database is created automatically at startup if it does not exist. It is listed in `.gitignore` and should not be committed to version control.
 
 ---
 
-## Configuration Files
+## Detection Settings
 
-### `config/botsort.yaml`
+The following constants can be edited in `src/gui.py`:
 
-Controls the BoT-SORT tracker behaviour (thresholds, buffer size, motion compensation).  
-See the [Ultralytics tracking documentation](https://docs.ultralytics.com/modes/track/) for field descriptions.
-
-### `config/data.yaml`
-
-Defines the dataset paths and class names used during training.  
-Paths are relative to the `config/` directory.
+| Constant | Default | Description |
+|----------|---------|-------------|
+| `CONFIDENCE_THRESHOLD` | `0.5` | Minimum detection confidence (0–1) |
+| `MAX_STRIKES` | `3` | Strikes before a student is flagged |
 
 ---
 
-## Large Model Files and Git LFS
+## Troubleshooting
 
-`models/yolov8n.pt` (~6 MB) is small enough to commit directly.  
-If you add a larger fine-tuned model (> 50 MB), consider using Git Large File Storage:
+### "Model file not found"
+
+Ensure `models/best.pt` exists. If you are using a different weights file, pass its path via `--model`:
 
 ```bash
-git lfs install
-git lfs track "models/*.pt"
-git add .gitattributes
-git add models/your_large_model.pt
-git commit -m "Add fine-tuned weights via LFS"
+python src/gui.py --model path/to/your_weights.pt
 ```
+
+### "Webcam could not be accessed"
+
+- Check that no other application is using the camera.
+- On Linux, verify you have permission: `ls -l /dev/video*`
+- Try a different camera index in the dropdown.
+
+### Very slow detection / low FPS
+
+- A GPU is strongly recommended for real-time performance. Install the CUDA-enabled PyTorch build:
+  ```bash
+  pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+  ```
+- On CPU, inference is slower. Lower the input resolution in your webcam settings or reduce the frame size in `run_detection()`.
+
+### Tkinter not available (Linux)
+
+```bash
+sudo apt-get install python3-tk
+```
+
+### Class labels look wrong
+
+The model was trained on three classes: `person`, `students_cheating`, `students_not_cheating`. If you see unexpected class names, you may be loading the wrong weights file. Use `models/best.pt` (custom trained) rather than `models/yolov8n.pt` (generic base model).
+
+### Database locked error
+
+SQLite allows a single writer. Make sure no other process has the database open simultaneously.

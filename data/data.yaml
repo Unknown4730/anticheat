@@ -1,0 +1,23 @@
+# YOLOv8 dataset configuration
+# Paths are relative to the location of this file (data/)
+path: .          # dataset root (relative to this YAML file)
+train: train/images
+val:   valid/images
+test:  test/images
+
+# Number of classes
+nc: 3
+
+# Class names
+names:
+  - person
+  - students_cheating
+  - students_not_cheating
+
+# Dataset source (Roboflow)
+roboflow:
+  workspace: rtjhx
+  project: exam-cheating-jnmv1-hodrg
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/rtjhx/exam-cheating-jnmv1-hodrg/dataset/1
