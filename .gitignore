@@ -10,13 +10,11 @@ venv/
 env/
 ENV/
 
-# Runtime databases (created automatically at runtime; do not commit)
+# Runtime databases and logs (created automatically at runtime; do not commit)
+runtime/
 *.db
 *.sqlite
 *.sqlite3
-
-# Logs and output directories
-logs/
 *.log
 
 # YOLOv8 training run outputs (large; re-generate by re-training)

@@ -9,3 +9,12 @@ pyyaml>=6.0              # YAML parsing (tracker/dataset configs)
 # GUI (usually included with Python; listed for documentation purposes)
 # tkinter is part of the standard library on most platforms.
 # On Ubuntu/Debian it may need: sudo apt-get install python3-tk
+
+# Optional – GPU / CUDA
+# For NVIDIA GPU acceleration install a CUDA-enabled PyTorch build BEFORE
+# running pip install -r requirements.txt:
+#
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+#
+# Recommended CUDA versions: 11.8 (cu118) or 12.1 (cu121).
+# CPU-only inference works without CUDA but is significantly slower.
