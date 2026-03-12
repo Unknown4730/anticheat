@@ -1,150 +1,372 @@
-# Anticheat — Classroom Monitoring (Refactored)
+# Anticheat — Classroom Cheating Detection
 
-A lightweight classroom monitoring tool that uses a YOLO-based detector + tracker to identify students and flag suspected cheating. The system supports multi-student detection, per-student strike counting (3-strike rule by default), a simple GUI, and an audit log of detection events.
+A classroom monitoring tool that uses a YOLOv8-based detector and BoT-SORT tracker to identify students in a live video feed and flag suspected cheating. Each student is tracked individually, with a configurable **3-strike rule**: on the third confirmed cheating detection the student is permanently flagged. All detections are displayed with colour-coded bounding boxes and persisted to a SQLite audit log.
 
-Table of contents
-- Overview
-- Features
-- Prerequisites
-- Installation
-- Quickstart
-- Configuration
-- Running the GUI
-- Dataset & model layout
-- Database & logs
-- Troubleshooting
-- Contributing
-- License
+---
 
-Overview
---------
-This project detects students in a classroom-like video feed and classifies each detection as either "cheating" or "not cheating" (based on your model's output). Each student is assigned an ID (from the tracker or a short-term centroid-based fallback), and strikes are counted per student. When a student reaches the configured strike limit (default 3), they are flagged as cheating.
+## Table of Contents
 
-Features
---------
-- Multi-student detection and tracking for classroom environments.
-- Per-student strike counters with configurable MAX_STRIKES (default 3).
-- Uses ultralytics YOLO model for detection and can use tracker IDs when available.
-- GUI with side panel showing active students, strike counts and statuses.
-- Exports flagged students to CSV and persists detection events in a runtime SQLite DB.
-- Configurable thresholds and model path via CLI args or environment variables.
+- [Overview](#overview)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+- [Configuration](#configuration)
+- [Running the GUI](#running-the-gui)
+- [Dataset & Model](#dataset--model)
+- [Database & Logs](#database--logs)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
-Prerequisites
--------------
-- Python 3.8 or newer
-- Recommended: GPU + compatible CUDA and matching PyTorch build for realtime performance
-- System requirements for OpenCV and ultralytics (see ultralytics docs)
+---
 
-Installation
-------------
-1. Clone the repository:
-   ```
+## Overview
+
+This project detects students in a classroom-like video feed and classifies each detection as either **cheating** (red box) or **not cheating** (green box). Each student is assigned a persistent ID by the BoT-SORT tracker (with a centroid-based fallback), and strikes are counted per student. When a student reaches the configured strike limit (default **3**), they are permanently flagged as cheating and highlighted in red for the remainder of the session.
+
+---
+
+## Features
+
+- **Multi-student detection** — designed for classroom environments with many simultaneous subjects.
+- **Per-student 3-strike rule** — each student gets 3 chances; absolute cheating is only declared on the third strike.
+- **Colour-coded bounding boxes** — green for OK, orange for warning (1–2 strikes), red for confirmed cheating (≥ 3 strikes).
+- **BoT-SORT tracking** — stable per-student IDs across frames; centroid-based fallback when tracker IDs are unavailable.
+- **Tkinter GUI** — side panel listing active students, strike counts, and statuses with Start / Stop / Reset controls.
+- **CSV export** — one-click export of all flagged students.
+- **Persistent audit log** — all cheating detections are written to a runtime SQLite database.
+- **Fully configurable** — model path, thresholds, labels, and tracker settings are all adjustable via CLI flags or environment variables.
+
+---
+
+## Prerequisites
+
+| Requirement | Details |
+|-------------|---------|
+| **Python** | 3.8 or newer |
+| **GPU (recommended)** | NVIDIA GPU with CUDA 11.8+ for real-time inference. CPU-only inference is supported but will be significantly slower. |
+| **PyTorch** | Install the CUDA-enabled build matching your CUDA version (see [pytorch.org/get-started](https://pytorch.org/get-started/locally/)). |
+| **System libraries** | On Ubuntu/Debian, Tkinter may need: `sudo apt-get install python3-tk` |
+
+---
+
+## Installation
+
+1. **Clone the repository:**
+
+   ```bash
    git clone https://github.com/Unknown4730/anticheat.git
    cd anticheat
    ```
 
-2. Create a virtual environment and install dependencies:
+2. **(Optional) Pull model weights via Git LFS** if they were not included in the clone:
+
+   ```bash
+   git lfs install
+   git lfs pull
    ```
+
+3. **Create a virtual environment and install dependencies:**
+
+   ```bash
    python -m venv .venv
+
    # macOS / Linux
    source .venv/bin/activate
+
    # Windows PowerShell
    .venv\Scripts\Activate.ps1
 
    pip install -r requirements.txt
    ```
 
-Quickstart
-----------
-1. Ensure a model exists at `./models/yolov8n.pt` or provide a different model path.
-2. Run the GUI (default camera index 0):
+4. **(Optional) Install a CUDA-enabled PyTorch** for GPU acceleration (replace `cu118` with your CUDA version):
+
+   ```bash
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
    ```
-   python -m src.gui --model ./models/yolov8n.pt --conf 0.5 --max-strikes 3
-   ```
-3. The video feed is shown in an OpenCV window. Use the GUI controls to Start/Stop and Reset logs. Press `q` in the video window to stop the detector.
 
-Configuration
--------------
-You can configure the detector via command-line arguments or environment variables.
+---
 
-CLI arguments (see `python -m src.gui --help`):
-- `--model`, `-m` : Path to model weights (default: `./models/yolov8n.pt` or `MODEL_PATH` env var)
-- `--conf` : Confidence threshold for detections (default: `0.5`)
-- `--max-strikes` : Maximum strikes before a student is flagged (default: `3`)
-- `--tracker-config` : Tracker configuration file path (default: `config/botsort.yaml`)
+## Quickstart
 
-Environment variables:
-- MODEL_PATH — default model path used if `--model` is not set
-- CONFIDENCE_THRESHOLD — default confidence threshold
-- MAX_STRIKES — default strike limit
-- MOVEMENT_THRESHOLD_PIXELS — centroid movement threshold (pixels) for movement detection
-- LABEL_CHEATING — model label for cheating detections (default: `students_cheating`)
-- LABEL_OK — model label for non-cheating detections (default: `students_not_cheating`)
+Run the GUI using the default model at `models/best.pt` (custom trained weights):
 
-Running the GUI
----------------
-- The GUI (`src/gui.py`) is the primary entrypoint. It will:
-  - Create a runtime SQLite DB at `runtime/cheat_logs.db` (if not present).
-  - Start camera capture and run detection/tracking in a background thread.
-  - Show detection results and per-student status in a side panel.
-  - Allow exporting flagged students (status = cheating) to CSV.
-- For headless testing or CI, use `scripts/simulate_detections.py` to validate strike logic without hardware.
+```bash
+python -m src.gui
+```
 
-Dataset & model layout
-----------------------
-Recommended repository structure after refactor:
+Specify a different model path and override thresholds:
+
+```bash
+python -m src.gui --model ./models/yolov8n.pt --conf 0.5 --max-strikes 3
+```
+
+Use environment variables instead of CLI flags:
+
+```bash
+MODEL_PATH=./models/best.pt CONFIDENCE_THRESHOLD=0.6 MAX_STRIKES=3 python -m src.gui
+```
+
+Validate strike logic without a camera (headless simulation):
+
+```bash
+python simulate_detections.py
+```
+
+---
+
+## Configuration
+
+All settings can be overridden via **CLI arguments** (highest priority) or **environment variables** (fallback).
+
+### CLI Arguments
+
+```
+python -m src.gui --help
+
+  -m, --model PATH        Path to model weights  [default: $MODEL_PATH or ./models/yolov8n.pt]
+      --conf FLOAT        Confidence threshold 0–1  [default: 0.5]
+      --max-strikes INT   Strikes before a student is flagged  [default: 3]
+      --tracker-config PATH  Tracker YAML config path  [default: config/botsort.yaml]
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MODEL_PATH` | `./models/yolov8n.pt` | Path to the YOLO model weights (`.pt` file). |
+| `CONFIDENCE_THRESHOLD` | `0.5` | Minimum detection confidence (0–1). Raise to reduce false positives. |
+| `MAX_STRIKES` | `3` | Number of cheating detections allowed before a student is permanently flagged. |
+| `MOVEMENT_THRESHOLD_PIXELS` | `30` | Centroid movement (pixels) considered a notable position change for fallback tracking. |
+| `LABEL_CHEATING` | `students_cheating` | Model class name for cheating detections. Change if your model uses different labels. |
+| `LABEL_OK` | `students_not_cheating` | Model class name for normal (non-cheating) detections. |
+| `TRACKER_CONFIG` | `config/botsort.yaml` | Path to the BoT-SORT tracker YAML configuration file. |
+
+**Example — custom labels:**
+
+```bash
+LABEL_CHEATING=cheating LABEL_OK=ok python -m src.gui --model ./models/custom.pt
+```
+
+---
+
+## Running the GUI
+
+`src/gui.py` is the primary application entrypoint. On launch it:
+
+1. Validates the model path and exits with a clear error if the file is missing.
+2. Creates `runtime/cheat_logs.db` (and the `runtime/` directory) if they do not exist.
+3. Opens the Tkinter control panel.
+
+**Control panel buttons:**
+
+| Button | Action |
+|--------|--------|
+| **Start** | Opens the selected camera and begins detection in a background thread. A separate OpenCV window shows the annotated live feed. Press `q` in that window to stop. |
+| **Stop** | Stops the detection thread and releases the camera. |
+| **Reset Logs** | Clears the `detections` table in the database and resets all in-memory strike counters. Use this at the start of each new exam session. |
+| **Export Flagged CSV** | Saves a CSV file listing all students whose status is `cheating` (student ID and strike count). |
+
+The **live feed window** overlays a bounding box on each detected student:
+
+- 🟢 **Green** — not cheating (0 strikes)
+- 🟠 **Orange** — warning (1–2 strikes)
+- 🔴 **Red** — confirmed cheating (≥ 3 strikes)
+
+---
+
+## Dataset & Model
+
+### Repository Structure
+
 ```
 .
-├── src/                # main application code (gui.py, helpers)
-├── models/             # model weights (e.g. yolov8n.pt)
+├── src/                    # Application source code
+│   └── gui.py              # Main GUI and detection entrypoint
+├── models/
+│   ├── best.pt             # Custom-trained YOLOv8 weights (primary model)
+│   └── yolov8n.pt          # Pretrained YOLOv8-nano base weights
 ├── data/
-│   ├── train/
-│   └── valid/
-├── config/             # botsort.yaml and other configs
-├── runtime/            # runtime DB & logs (ignored by git)
-├── docs/               # documentation (usage/development)
+│   ├── data.yaml           # YOLOv8 dataset config (class names, split paths)
+│   ├── train/              # Training images and YOLO-format labels
+│   └── valid/              # Validation images and YOLO-format labels
+├── config/
+│   └── botsort.yaml        # BoT-SORT tracker configuration
+├── runtime/                # Created at runtime; excluded from git
+│   └── cheat_logs.db       # SQLite audit log
+├── docs/
+│   ├── usage.md            # Detailed usage guide
+│   └── development.md      # Architecture, training, and contribution guide
+├── simulate_detections.py  # Headless strike-logic simulation (no camera needed)
 ├── requirements.txt
+├── LICENSE
 └── README.md
 ```
 
-- If your model weights are large, consider using Git LFS:
-  - `git lfs install`
-  - `git lfs track "models/*.pt"`
-  - Commit the `.gitattributes` file.
+### Dataset
 
-Database & logs
----------------
-- Detection events are persisted to `runtime/cheat_logs.db` in the `detections` table:
-  - Columns: id, student_id, timestamp, label, strikes
-- GUI "Reset Logs" clears the `detections` table and resets in-memory counters.
-- Runtime files and DBs are ignored by `.gitignore` to avoid committing ephemeral data.
+The model was trained on the [Roboflow exam-cheating dataset](https://universe.roboflow.com/rtjhx/exam-cheating-jnmv1-hodrg/dataset/1) (CC BY 4.0). It has three classes:
 
-Troubleshooting
----------------
-- Model load error: Confirm the model path provided exists and that ultralytics + torch versions are compatible.
-- ultralytics import error: Install/update ultralytics and torch as per the versions in `requirements.txt`.
-- Camera not found: Change the camera index in the GUI or verify camera permissions.
-- Wrong labels/behavior: Ensure your model outputs the configured labels (LABEL_CHEATING / LABEL_OK). If different, set these environment variables or adapt the model.
+| ID | Class name | Description |
+|----|-----------|-------------|
+| 0 | `person` | Generic person (unlabelled behaviour) |
+| 1 | `students_cheating` | Student exhibiting cheating behaviour |
+| 2 | `students_not_cheating` | Student behaving normally |
 
-Links
------
-- More usage details: `docs/usage.md`
-- Development notes: `docs/development.md`
+### Git LFS for Model Weights
 
-Contributing
-------------
-- Please open issues for problems or feature requests.
-- Follow the project style:
-  - Type hints and docstrings encouraged.
-  - Keep performance-sensitive work off the GUI thread.
-  - Add tests under `tests/` for logic (e.g., strike accumulation rules).
-- To contribute:
-  1. Fork the repo, create a feature branch.
-  2. Make changes and add/update tests.
-  3. Open a pull request with a clear description.
+Model weight files (`.pt`) are large binary files. If you plan to commit updated weights, use [Git LFS](https://git-lfs.github.com/):
 
-License
--------
-This repository does not include a license file by default. If you want to make the code permissively reusable, add an MIT license by creating a `LICENSE` file with the standard MIT text.
+```bash
+git lfs install
+git lfs track "models/*.pt"
+git add .gitattributes
+git commit -m "track model weights with Git LFS"
+```
 
-If you prefer, I can: create the README in the repository, add LICENSE (MIT), or open a PR with the README plus the other documentation files (usage, development).
+---
+
+## Database & Logs
+
+Detection events are persisted to **`runtime/cheat_logs.db`** (created automatically at first run). The `detections` table schema:
+
+```sql
+CREATE TABLE detections (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id TEXT,     -- tracker-assigned student ID
+    timestamp  TEXT,     -- YYYY-MM-DD HH:MM:SS
+    label      TEXT,     -- detected class name
+    strikes    INTEGER   -- cumulative strike count at time of event
+);
+```
+
+**Query the log directly:**
+
+```bash
+sqlite3 runtime/cheat_logs.db "SELECT * FROM detections ORDER BY timestamp DESC LIMIT 20;"
+```
+
+**Reset Logs** (GUI button) deletes all rows from `detections` and clears in-memory counters — use this at the start of a new exam session.
+
+The `runtime/` directory is listed in `.gitignore` so database files are never committed.
+
+---
+
+## Troubleshooting
+
+### Model file not found
+
+```
+Model not found at ./models/yolov8n.pt
+```
+
+Confirm the weights file exists. If you have custom weights, pass the path explicitly:
+
+```bash
+python -m src.gui --model /path/to/your_weights.pt
+```
+
+If using Git LFS, pull the files first: `git lfs pull`
+
+---
+
+### `ultralytics` import error
+
+```
+ERROR: ultralytics module not found.
+```
+
+Ensure the virtual environment is active and dependencies are installed:
+
+```bash
+pip install -r requirements.txt
+```
+
+Check that the installed `ultralytics` and `torch` versions are compatible (see [ultralytics docs](https://docs.ultralytics.com)).
+
+---
+
+### Camera not found / cannot open camera
+
+- Verify no other application is using the camera.
+- On Linux, check permissions: `ls -l /dev/video*`
+- Try changing the camera index in the **Camera** field of the control panel (0, 1, 2, …).
+
+---
+
+### Tkinter not available (Linux)
+
+```bash
+sudo apt-get install python3-tk
+```
+
+---
+
+### Very slow detection / low FPS
+
+Install the CUDA-enabled PyTorch build matching your GPU's CUDA version:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+```
+
+---
+
+### Wrong labels / unexpected class names
+
+The application expects detections labelled `students_cheating` and `students_not_cheating`. If your model uses different names, override them:
+
+```bash
+LABEL_CHEATING=cheating LABEL_OK=not_cheating python -m src.gui --model ./models/custom.pt
+```
+
+---
+
+### Database locked error
+
+SQLite supports only a single writer at a time. Ensure no other process (e.g., a SQLite browser tool) has the database open simultaneously.
+
+---
+
+For more detailed troubleshooting and usage examples see [`docs/usage.md`](docs/usage.md).  
+For architecture details, training instructions, and contribution guidelines see [`docs/development.md`](docs/development.md).
+
+---
+
+## Contributing
+
+Contributions are welcome! Please follow these steps:
+
+1. **Fork** the repository and create a feature branch:
+
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+2. **Make your changes.** Follow the code style guidelines:
+   - Adhere to [PEP 8](https://peps.python.org/pep-0008/).
+   - Use type hints and docstrings for public functions.
+   - Keep performance-sensitive work off the GUI thread.
+   - No hardcoded absolute paths — use CLI args, environment variables, or paths relative to `__file__`.
+
+3. **Test your changes** (run `simulate_detections.py` to verify strike logic without a camera).
+
+4. **Open a pull request** with a clear description of what you changed and why.
+
+**Branch naming conventions:**
+
+| Type | Pattern | Example |
+|------|---------|---------|
+| New feature | `feature/<name>` | `feature/export-csv-logs` |
+| Bug fix | `fix/<name>` | `fix/camera-index-crash` |
+| Documentation | `docs/<name>` | `docs/update-usage-guide` |
+
+Please open an [issue](https://github.com/Unknown4730/anticheat/issues) for bug reports or feature requests before starting large changes.
+
+---
+
+## License
+
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
