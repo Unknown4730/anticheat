@@ -136,3 +136,33 @@ The model was trained on three classes: `person`, `students_cheating`, `students
 ### Database locked error
 
 SQLite allows a single writer. Make sure no other process has the database open simultaneously.
+
+# Usage & tuning
+
+Running:
+- Default:
+  python -m src.gui
+- With explicit model and thresholds:
+  python -m src.gui --model ./models/yolov8n.pt --conf 0.6 --max-strikes 3
+
+Tuning tips:
+- CONFIDENCE_THRESHOLD (`--conf`): raise to reduce false positives, lower to detect more subtle events.
+- MAX_STRIKES (`--max-strikes`): number of allowed cheating events before flagging (default 3).
+- MOVEMENT_THRESHOLD_PIXELS (env): tuned to your camera resolution; controls centroid movement threshold.
+
+Model:
+- Ensure the model outputs the expected class names. If your model uses different class names, set the env variables:
+  LABEL_CHEATING and LABEL_OK
+  Example:
+    LABEL_CHEATING=cheating LABEL_OK=not_cheating python -m src.gui --model ./models/custom.pt
+
+Runtime DB:
+- Detection events are stored in runtime/cheat_logs.db in the table `detections`.
+- To clear logs from GUI: press "Reset Logs" (this deletes detections table contents).
+
+Troubleshooting:
+- ultralytics import or model load error: confirm version compatibility between ultralytics and torch; see ultralytics docs.
+- Camera not accessible: check camera index, permissions, or use a USB webcam.
+
+Embedding into other systems:
+- The Detector class is designed to be used programmatically: you can instantiate Detector and consume its events or extend the GUI.
